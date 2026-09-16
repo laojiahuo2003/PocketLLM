@@ -1,64 +1,111 @@
 cmake_minimum_required(VERSION 3.10)
-project(PocketLLM_Inference CXX)
+project(PocketInference VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# 选项
+option(POCKET_BUILD_SHARED "Build shared library" ON)
+option(POCKET_BUILD_EXAMPLES "Build examples" ON)
+option(POCKET_BUILD_TESTS "Build tests" OFF)
+option(POCKET_ARM_NEON "Enable ARM NEON optimizations" ON)
 
 # 编译选项
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native")
-    if(ANDROID)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    if(POCKET_ARM_NEON)
+        add_compile_options(-mfpu=neon)
+        add_definitions(-DPOCKET_ARM_NEON)
     endif()
 endif()
 
-# 包含目录
-include_directories(${PROJECT_SOURCE_DIR}/include)
-
-# 源文件
-file(GLOB_RECURSE SOURCES
-    "src/*.cpp"
-    "src/ops/*.cpp"
-    "src/backends/cpu/*.cpp"
-)
-
-# 如果是 ARM 平台，添加 NEON 后端
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm" OR ANDROID)
-    file(GLOB_RECURSE NEON_SOURCES "src/backends/neon/*.cpp")
-    list(APPEND SOURCES ${NEON_SOURCES})
-    add_definitions(-DENABLE_NEON)
+# 优化选项
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
+    add_compile_options(-O3 -march=native)
 endif()
 
-# 静态库
-add_library(pllm_inference STATIC ${SOURCES})
+# 警告选项
+add_compile_options(-Wall -Wextra -Wpedantic)
 
-# 动态库
-add_library(pllm_inference_shared SHARED ${SOURCES})
-set_target_properties(pllm_inference_shared PROPERTIES OUTPUT_NAME pllm_inference)
+# 包含目录
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# 测试可执行文件（可选）
-option(BUILD_TESTS "Build tests" OFF)
-if(BUILD_TESTS)
-    file(GLOB TEST_SOURCES "tests/*.cpp")
-    foreach(test_src ${TEST_SOURCES})
-        get_filename_component(test_name ${test_src} NAME_WE)
-        add_executable(${test_name} ${test_src})
-        target_link_libraries(${test_name} pllm_inference)
-    endforeach()
+# 源文件
+set(POCKET_SOURCES
+    src/tensor.cpp
+    src/model.cpp
+    src/tokenizer.cpp
+    src/sampler.cpp
+    src/generator.cpp
+    src/ops/matmul.cpp
+    src/ops/norm.cpp
+    src/ops/rope.cpp
+    src/ops/attention.cpp
+    src/ops/ffn.cpp
+    src/utils/file.cpp
+    src/utils/json.cpp
+)
+
+# 头文件
+set(POCKET_HEADERS
+    include/pocket.h
+)
+
+# 库目标
+if(POCKET_BUILD_SHARED)
+    add_library(pocket SHARED ${POCKET_SOURCES})
+else()
+    add_library(pocket STATIC ${POCKET_SOURCES})
+endif()
+
+target_include_directories(pocket PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
+# 链接库
+target_link_libraries(pocket PRIVATE pthread)
+
+# 示例程序
+if(POCKET_BUILD_EXAMPLES)
+    add_executable(pocket-chat examples/chat.cpp)
+    target_link_libraries(pocket-chat pocket)
+
+    add_executable(pocket-generate examples/generate.cpp)
+    target_link_libraries(pocket-generate pocket)
+endif()
+
+# 测试
+if(POCKET_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # 安装
-install(TARGETS pllm_inference pllm_inference_shared
-    ARCHIVE DESTINATION lib
+install(TARGETS pocket
+    EXPORT PocketTargets
     LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
     RUNTIME DESTINATION bin
 )
 
-install(DIRECTORY include/ DESTINATION include/pllm)
+install(FILES ${POCKET_HEADERS}
+    DESTINATION include
+)
 
-# Android NDK 支持
-if(ANDROID)
-    find_library(log-lib log)
-    target_link_libraries(pllm_inference ${log-lib})
-    target_link_libraries(pllm_inference_shared ${log-lib})
-endif()
+# 导出配置
+install(EXPORT PocketTargets
+    FILE PocketTargets.cmake
+    NAMESPACE Pocket::
+    DESTINATION lib/cmake/Pocket
+)
+
+# 生成版本信息
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/pocket_version.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/include/pocket_version.h
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/pocket_version.h
+    DESTINATION include
+)
