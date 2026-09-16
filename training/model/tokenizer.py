@@ -198,7 +198,9 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # 加载分词器
-    tokenizer = Tokenizer("./tokenizer")
+    import os
+    tokenizer_path = os.path.join(os.path.dirname(__file__), "../tokenizer")
+    tokenizer = Tokenizer(tokenizer_path)
 
     # 测试编码
     text = "你好，世界！Hello, World!"

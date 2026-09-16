@@ -15,12 +15,20 @@ PocketLLM 是一个完全自研的端侧 LLM 项目，覆盖：
 
 ```
 PocketLLM/
-├── model/            # 模型架构定义
-├── training/         # 训练代码（预训练/SFT/DPO）
-├── data/             # 语料数据
-├── inference/        # C++ 推理引擎
-├── android/          # Android 应用
-├── tools/            # 工具脚本（量化/转换/测试）
+├── training/         # 训练相关（完整独立）
+│   ├── model/        # 模型架构定义
+│   ├── tokenizer/    # 分词器
+│   ├── data/         # 语料数据
+│   ├── scripts/      # 训练脚本（预训练/SFT/DPO）
+│   ├── configs/      # 训练配置
+│   └── checkpoints/  # 模型权重
+├── inference/        # 推理引擎（完整独立）
+│   ├── cpp/          # C++ 推理引擎
+│   ├── python/       # Python 绑定
+│   └── benchmarks/   # 性能测试
+├── mobile/           # 移动端部署
+│   └── android/      # Android 应用
+├── tools/            # 通用工具
 └── docs/             # 文档
 ```
 
@@ -43,29 +51,29 @@ make -j4
 
 ```bash
 # 预训练
-python training/pretrain.py --config training/configs/pretrain_config.yaml
+python training/scripts/pretrain.py --config training/configs/pretrain_config.yaml
 
 # 监督微调
-python training/sft.py --config training/configs/sft_config.yaml
+python training/scripts/sft.py --config training/configs/sft_config.yaml
 
 # DPO 训练
-python training/dpo.py --config training/configs/dpo_config.yaml
+python training/scripts/dpo.py --config training/configs/dpo_config.yaml
 ```
 
 ### 3. 模型导出与量化
 
 ```bash
 # 导出模型
-python model/export.py --checkpoint checkpoints/latest.pt --output model.bin
+python training/model/export.py --checkpoint training/checkpoints/latest.pt --output model.pllm
 
 # 量化
-python tools/quantize.py --input model.bin --output model_int4.bin --bits 4
+python tools/quantize.py --input model.pllm --output model_int4.pllm --bits 4
 ```
 
 ### 4. Android 部署
 
 ```bash
-cd android
+cd mobile/android
 ./gradlew assembleRelease
 ```
 

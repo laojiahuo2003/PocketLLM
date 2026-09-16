@@ -14,7 +14,7 @@ PocketLLM 自带一个针对中英文优化的预训练分词器，特点：
 ### 1. 分词器文件位置
 
 ```bash
-PocketLLM/tokenizer/
+PocketLLM/training/tokenizer/
 ├── tokenizer.json          # 分词器主文件
 └── tokenizer_config.json   # 配置文件
 ```
@@ -34,8 +34,10 @@ wget https://github.com/YOUR_REPO/PocketLLM/releases/download/v0.1.0/tokenizer_c
 ```python
 from model.tokenizer import Tokenizer
 
-# 加载分词器
+# 加载分词器（相对于 training/ 目录）
 tokenizer = Tokenizer("./tokenizer")
+# 或使用绝对路径
+tokenizer = Tokenizer("/path/to/PocketLLM/training/tokenizer")
 
 # 编码
 text = "你好，世界！"

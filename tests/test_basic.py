@@ -3,7 +3,10 @@
 """
 
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+
+# 添加 training 目录到路径
+sys.path.insert(0, str(Path(__file__).parent.parent / "training"))
 
 from model import ModelRegistry, TINY_CONFIG, SMALL_CONFIG, BASE_CONFIG
 

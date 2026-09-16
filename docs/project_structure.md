@@ -4,101 +4,90 @@
 
 ```
 PocketLLM/
-├── README.md                   # 项目说明
-├── requirements.txt            # Python 依赖
-├── .gitignore                  # Git 忽略文件
+├── training/                   # 🎓 训练相关（完整独立）
+│   ├── model/                  # 模型定义
+│   │   ├── __init__.py
+│   │   ├── base.py             # 模型基类
+│   │   ├── config.py           # 模型配置
+│   │   ├── registry.py         # 模型注册表
+│   │   ├── export.py           # 导出工具
+│   │   ├── tokenizer.py        # 分词器封装
+│   │   ├── layers/             # 可组合层
+│   │   │   ├── attention.py
+│   │   │   ├── ffn.py
+│   │   │   └── norm.py
+│   │   └── architectures/      # 具体架构
+│   │       ├── llama_like.py   # v1.0
+│   │       └── ...             # 未来架构
+│   │
+│   ├── tokenizer/              # 分词器文件
+│   │   ├── tokenizer.json
+│   │   └── tokenizer_config.json
+│   │
+│   ├── data/                   # 数据处理
+│   │   ├── raw/                # 原始语料
+│   │   ├── processed/          # 预处理后
+│   │   ├── tokenized/          # 分词后
+│   │   └── scripts/            # 数据处理脚本
+│   │
+│   ├── scripts/                # 训练脚本
+│   │   ├── pretrain.py         # 预训练
+│   │   ├── sft.py              # 监督微调
+│   │   └── dpo.py              # DPO
+│   │
+│   ├── configs/                # 训练配置
+│   │   ├── pretrain_config.yaml
+│   │   ├── sft_config.yaml
+│   │   └── dpo_config.yaml
+│   │
+│   └── checkpoints/            # 模型权重
 │
-├── docs/                       # 📚 文档
-│   └── architecture.md         # 架构设计文档
-│
-├── model/                      # 🧠 模型定义（PyTorch）
-│   ├── __init__.py
-│   ├── base.py                 # 模型基类
-│   ├── config.py               # 模型配置（含预定义配置）
-│   ├── registry.py             # 模型注册表
-│   ├── export.py               # 导出为 .pllm 格式
-│   ├── layers/                 # 可组合层
-│   │   ├── attention.py        # 注意力层（MHA, GQA...）
-│   │   ├── ffn.py              # FFN 层（Standard, SwiGLU...）
-│   │   └── norm.py             # 归一化层（RMSNorm）
-│   └── architectures/          # 具体架构实现
-│       ├── llama_like.py       # v1.0: Llama-style 架构
-│       ├── hybrid_attention.py # v2.0: 混合注意力（未来）
-│       └── moe.py              # v3.0: MoE（未来）
-│
-├── training/                   # 🎯 训练代码
-│   ├── pretrain.py             # 预训练脚本
-│   ├── sft.py                  # 监督微调脚本
-│   ├── dpo.py                  # DPO 训练脚本
-│   ├── data_loader.py          # 数据加载器
-│   ├── trainer.py              # 训练器封装
-│   └── configs/                # 训练配置文件
-│       ├── pretrain_config.yaml
-│       ├── sft_config.yaml
-│       └── dpo_config.yaml
-│
-├── data/                       # 💾 数据目录
-│   ├── raw/                    # 原始语料
-│   ├── processed/              # 预处理后的数据
-│   ├── tokenized/              # 分词后的数据
-│   └── scripts/                # 数据处理脚本
-│       ├── collect.py          # 数据收集
-│       ├── clean.py            # 数据清洗
-│       └── preprocess.py       # 数据预处理
-│
-├── checkpoints/                # 💾 模型权重（.gitignore）
-│
-├── inference/                  # ⚡ 推理引擎
+├── inference/                  # ⚡ 推理引擎（完整独立）
 │   ├── cpp/                    # C++ 推理引擎
-│   │   ├── CMakeLists.txt      # CMake 配置
+│   │   ├── CMakeLists.txt
 │   │   ├── include/            # 头文件
-│   │   │   ├── op.h            # 算子接口
-│   │   │   ├── op_registry.h   # 算子注册表
-│   │   │   ├── tensor.h        # 张量定义
-│   │   │   ├── graph.h         # 计算图
-│   │   │   └── executor.h      # 图执行器
+│   │   │   ├── op.h
+│   │   │   ├── op_registry.h
+│   │   │   ├── tensor.h
+│   │   │   ├── graph.h
+│   │   │   └── executor.h
 │   │   ├── src/                # 源文件
 │   │   │   ├── ops/            # 算子实现
-│   │   │   │   ├── matmul.cpp
-│   │   │   │   ├── attention.cpp
-│   │   │   │   └── ...
-│   │   │   └── backends/       # 多后端实现
-│   │   │       ├── cpu/        # CPU 实现
-│   │   │       ├── neon/       # ARM NEON 优化
-│   │   │       └── gpu/        # GPU（未来）
-│   │   ├── format/             # 格式规范
-│   │   │   └── pllm_format.md  # .pllm 格式文档
-│   │   └── tests/              # 单元测试
+│   │   │   └── backends/       # 多后端
+│   │   │       ├── cpu/
+│   │   │       ├── neon/
+│   │   │       └── gpu/
+│   │   └── format/             # 格式规范
+│   │       └── pllm_format.md
 │   │
-│   ├── python/                 # Python 绑定（用于验证）
+│   ├── python/                 # Python 绑定
 │   └── benchmarks/             # 性能测试
 │
-├── android/                    # 📱 Android 应用
-│   ├── app/                    # Android 项目
-│   │   ├── build.gradle
-│   │   └── src/
-│   │       └── main/
-│   │           ├── java/       # Java/Kotlin 代码
-│   │           ├── cpp/        # JNI 接口
-│   │           ├── res/        # 资源文件
-│   │           └── assets/     # 模型文件
-│   ├── build.gradle            # 项目配置
-│   └── settings.gradle
+├── mobile/                     # 📱 移动端部署
+│   └── android/                # Android 应用
+│       ├── app/
+│       ├── build.gradle
+│       └── settings.gradle
 │
-├── tools/                      # 🔧 工具脚本
-│   ├── quantize.py             # 量化工具
-│   ├── optimize.py             # 模型优化
-│   ├── convert.py              # 格式转换
-│   └── benchmark.py            # 性能测试
+├── docs/                       # 📚 文档
+│   ├── architecture.md
+│   ├── project_structure.md
+│   ├── tokenizer.md
+│   └── lessons_from_llama_cpp.md
+│
+├── tools/                      # 🔧 通用工具
+│   ├── quantize.py
+│   ├── optimize.py
+│   └── benchmark.py
 │
 ├── tests/                      # 🧪 测试
-│   ├── test_model.py
-│   ├── test_training.py
-│   └── test_inference.py
+│   └── test_basic.py
 │
-└── examples/                   # 📖 示例代码
-    ├── train_demo.py           # 训练示例
-    └── inference_demo.py       # 推理示例
+├── examples/                   # 📖 示例
+│
+├── README.md
+├── requirements.txt
+└── .gitignore
 ```
 
 ## 关键设计特性
