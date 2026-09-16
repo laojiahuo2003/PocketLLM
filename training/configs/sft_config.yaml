@@ -53,9 +53,12 @@ logging:
   log_level: "info"
   log_steps: 10
   eval_steps: 200
-  use_wandb: false
-  wandb_project: "pocketllm"
-  wandb_run_name: "sft"
+
+  # SwanLab 配置
+  use_swanlab: true
+  swanlab_project: "pocketllm"
+  swanlab_run_name: "sft"
+  swanlab_api_key: "cr0yHWFKR2vT7NJyVebZI"
 
 # 硬件配置
 hardware:

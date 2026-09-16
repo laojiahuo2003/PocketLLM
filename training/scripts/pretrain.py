@@ -18,6 +18,14 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 import logging
 
+# SwanLab
+try:
+    import swanlab
+    SWANLAB_AVAILABLE = True
+except ImportError:
+    SWANLAB_AVAILABLE = False
+    print("SwanLab not installed. Install with: pip install swanlab")
+
 # 添加项目路径
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -53,11 +61,14 @@ def setup_seed(seed):
 
 def create_model(model_config_dict):
     """创建模型"""
+    # 提取 architecture（如果有），其余参数传给 ModelConfig
+    architecture = model_config_dict.pop('architecture', 'llama_like')
+
     # 从字典创建 ModelConfig
     config = ModelConfig(**model_config_dict)
 
     # 创建模型
-    model = ModelRegistry.create("llama_like", config)
+    model = ModelRegistry.create(architecture, config)
 
     logger.info(f"Model created: {model.get_num_params() / 1e6:.1f}M parameters")
     logger.info(f"Memory footprint: {model.get_memory_footprint()['total_mb']:.1f} MB")
@@ -91,7 +102,7 @@ def create_scheduler(optimizer, config, total_steps):
     return scheduler
 
 
-def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device):
+def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device, swanlab_run=None):
     """训练一个 epoch"""
     model.train()
     total_loss = 0
@@ -144,6 +155,15 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
                     'lr': f'{current_lr:.2e}'
                 })
 
+                # SwanLab 记录
+                if swanlab_run is not None:
+                    swanlab_run.log({
+                        'train/loss': avg_loss,
+                        'train/learning_rate': current_lr,
+                        'train/epoch': epoch,
+                        'train/step': step
+                    })
+
     return total_loss / step
 
 
@@ -185,6 +205,7 @@ def main():
     parser = argparse.ArgumentParser(description="PocketLLM Pretraining")
     parser.add_argument('--config', type=str, required=True, help='Path to config file')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint to resume from')
+    parser.add_argument('--swanlab-api-key', type=str, default=None, help='SwanLab API key')
     args = parser.parse_args()
 
     # 加载配置
@@ -197,6 +218,30 @@ def main():
     # 设置设备
     device = torch.device(config['hardware']['device'])
     logger.info(f"Using device: {device}")
+
+    # 初始化 SwanLab
+    swanlab_run = None
+    use_swanlab = config['logging'].get('use_swanlab', False)
+
+    if use_swanlab and SWANLAB_AVAILABLE:
+        # 从环境变量或参数获取 API key
+        api_key = args.swanlab_api_key or config['logging'].get('swanlab_api_key') or os.getenv('SWANLAB_API_KEY')
+
+        if api_key:
+            os.environ['SWANLAB_API_KEY'] = api_key
+
+        swanlab_run = swanlab.init(
+            project=config['logging'].get('swanlab_project', 'pocketllm'),
+            experiment_name=config['logging'].get('swanlab_run_name', 'pretrain'),
+            config={
+                'model': config['model'],
+                'training': config['training'],
+                'data': config['data']
+            }
+        )
+        logger.info("SwanLab initialized")
+    elif use_swanlab and not SWANLAB_AVAILABLE:
+        logger.warning("SwanLab requested but not installed. Install with: pip install swanlab")
 
     # 加载分词器
     logger.info("Loading tokenizer...")
@@ -260,10 +305,17 @@ def main():
         # 训练
         avg_loss = train_epoch(
             model, train_loader, optimizer, scheduler,
-            config, epoch + 1, device
+            config, epoch + 1, device, swanlab_run
         )
 
         logger.info(f"Epoch {epoch + 1} - Average Loss: {avg_loss:.4f}")
+
+        # SwanLab 记录 epoch 指标
+        if swanlab_run is not None:
+            swanlab_run.log({
+                'epoch/loss': avg_loss,
+                'epoch/number': epoch + 1
+            })
 
         # 保存检查点
         is_best = avg_loss < best_loss
@@ -290,6 +342,11 @@ def main():
     logger.info(f"Best loss: {best_loss:.4f}")
     logger.info(f"Final model saved to {final_path}")
     logger.info(f"{'='*50}")
+
+    # 关闭 SwanLab
+    if swanlab_run is not None:
+        swanlab_run.finish()
+        logger.info("SwanLab run finished")
 
 
 if __name__ == "__main__":

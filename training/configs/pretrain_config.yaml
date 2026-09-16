@@ -63,9 +63,12 @@ logging:
   log_level: "info"
   log_steps: 10
   eval_steps: 500
-  use_wandb: false
-  wandb_project: "pocketllm"
-  wandb_run_name: "pretrain"
+
+  # SwanLab 配置
+  use_swanlab: true
+  swanlab_project: "pocketllm"
+  swanlab_run_name: "pretrain"
+  swanlab_api_key: "cr0yHWFKR2vT7NJyVebZI"  # 你的 API key
 
 # 硬件配置
 hardware:
