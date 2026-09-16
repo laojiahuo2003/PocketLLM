@@ -7,7 +7,10 @@
 import os
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# 添加 training 目录到路径
+training_path = Path(__file__).parent.parent / "training"
+sys.path.insert(0, str(training_path))
 
 import torch
 from torch.utils.data import DataLoader
@@ -21,7 +24,7 @@ print("=" * 60)
 
 # 1. 加载分词器
 print("\n[1/5] 加载分词器...")
-tokenizer = Tokenizer("training/tokenizer")
+tokenizer = Tokenizer(str(training_path / "tokenizer"))
 print(f"✓ 分词器加载成功，词表大小: {tokenizer.get_vocab_size()}")
 
 # 2. 创建模型
@@ -36,7 +39,7 @@ print(f"  内存占用: {model.get_memory_footprint()['total_mb']:.1f} MB")
 # 3. 加载数据集
 print("\n[3/5] 加载数据集...")
 train_dataset = PretrainDataset(
-    "training/data/pretrain_t2t_smoke.jsonl",
+    str(training_path / "data/pretrain_t2t_smoke.jsonl"),
     tokenizer,
     max_length=256
 )
