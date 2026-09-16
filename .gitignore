@@ -1,0 +1,94 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# 模型权重和检查点
+checkpoints/*
+!checkpoints/.gitkeep
+outputs/
+runs/
+logs/
+
+# 数据文件
+data/raw/*
+data/processed/*
+data/tokenized/*
+!data/**/.gitkeep
+*.jsonl
+*.parquet
+*.arrow
+
+# C++ 构建产物
+inference/cpp/build/
+inference/cpp/cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Android
+android/.gradle/
+android/.idea/
+android/local.properties
+android/*/build/
+android/*/.cxx/
+android/captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 环境变量
+.env
+.env.local
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# 临时文件
+*.log
+*.tmp
+tmp/
+temp/
+
+# 测试覆盖率
+.coverage
+htmlcov/
+.pytest_cache/
