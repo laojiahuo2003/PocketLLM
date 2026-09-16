@@ -1,0 +1,73 @@
+# PocketLLM 预训练配置
+
+# 模型配置
+model:
+  architecture: "llama_like"
+  vocab_size: 6400
+  hidden_size: 768
+  num_layers: 12
+  num_attention_heads: 12
+  num_key_value_heads: 4  # GQA
+  intermediate_size: 2048
+  max_position_embeddings: 2048
+  rope_theta: 10000.0
+  rms_norm_eps: 1.0e-6
+  hidden_act: "silu"
+  tie_word_embeddings: false
+
+# 数据配置
+data:
+  train_file: "training/data/pretrain_t2t_mini.jsonl"
+  eval_file: "training/data/pretrain_t2t_smoke.jsonl"
+  max_length: 512
+  num_workers: 4
+
+# 训练配置
+training:
+  output_dir: "training/checkpoints/pretrain"
+  num_epochs: 3
+  batch_size: 8
+  gradient_accumulation_steps: 4  # 有效 batch size = 8 * 4 = 32
+  learning_rate: 5.0e-4
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+
+  # 优化器
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+
+  # 学习率调度
+  lr_scheduler: "cosine"
+  lr_scheduler_kwargs:
+    num_cycles: 0.5
+
+  # 混合精度
+  fp16: false
+  bf16: true  # RTX 3080 支持 bf16
+
+  # DeepSpeed（可选）
+  use_deepspeed: false
+  deepspeed_config: null
+
+# 保存和日志
+checkpoint:
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 3
+  resume_from_checkpoint: null
+
+logging:
+  log_level: "info"
+  log_steps: 10
+  eval_steps: 500
+  use_wandb: false
+  wandb_project: "pocketllm"
+  wandb_run_name: "pretrain"
+
+# 硬件配置
+hardware:
+  device: "cuda"
+  seed: 42

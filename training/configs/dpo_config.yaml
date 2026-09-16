@@ -1,0 +1,69 @@
+# PocketLLM DPO 配置
+
+# 模型配置（从 SFT 检查点加载）
+model:
+  architecture: "llama_like"
+  checkpoint: "training/checkpoints/sft/final"  # SFT 模型路径
+
+# 数据配置
+data:
+  train_file: "training/data/dpo.jsonl"
+  eval_file: null
+  max_length: 1024
+  num_workers: 4
+
+# DPO 特定配置
+dpo:
+  beta: 0.1  # DPO 温度参数
+  label_smoothing: 0.0
+  reference_model: "training/checkpoints/sft/final"  # 参考模型（通常是 SFT 模型）
+
+# 训练配置
+training:
+  output_dir: "training/checkpoints/dpo"
+  num_epochs: 1
+  batch_size: 2  # DPO 需要成对数据，显存占用更大
+  gradient_accumulation_steps: 16  # 有效 batch size = 2 * 16 = 32
+  learning_rate: 5.0e-6  # DPO 学习率更小
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_grad_norm: 1.0
+
+  # 优化器
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+  # 学习率调度
+  lr_scheduler: "cosine"
+  lr_scheduler_kwargs:
+    num_cycles: 0.5
+
+  # 混合精度
+  fp16: false
+  bf16: true
+
+  # DeepSpeed（可选）
+  use_deepspeed: false
+  deepspeed_config: null
+
+# 保存和日志
+checkpoint:
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 3
+  resume_from_checkpoint: null
+
+logging:
+  log_level: "info"
+  log_steps: 10
+  eval_steps: 200
+  use_wandb: false
+  wandb_project: "pocketllm"
+  wandb_run_name: "dpo"
+
+# 硬件配置
+hardware:
+  device: "cuda"
+  seed: 42

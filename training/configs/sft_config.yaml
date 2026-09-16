@@ -1,0 +1,63 @@
+# PocketLLM SFT 配置
+
+# 模型配置（从预训练检查点加载）
+model:
+  architecture: "llama_like"
+  checkpoint: "training/checkpoints/pretrain/final"  # 预训练模型路径
+
+# 数据配置
+data:
+  train_file: "training/data/sft_t2t_mini.jsonl"
+  eval_file: "training/data/sft_t2t_smoke.jsonl"
+  max_length: 1024  # SFT 通常需要更长的上下文
+  num_workers: 4
+
+# 训练配置
+training:
+  output_dir: "training/checkpoints/sft"
+  num_epochs: 2
+  batch_size: 4  # SFT 序列更长，减小 batch size
+  gradient_accumulation_steps: 8  # 有效 batch size = 4 * 8 = 32
+  learning_rate: 2.0e-5  # SFT 学习率更小
+  weight_decay: 0.01
+  warmup_steps: 100
+  max_grad_norm: 1.0
+
+  # 优化器
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+  # 学习率调度
+  lr_scheduler: "cosine"
+  lr_scheduler_kwargs:
+    num_cycles: 0.5
+
+  # 混合精度
+  fp16: false
+  bf16: true
+
+  # DeepSpeed（可选）
+  use_deepspeed: false
+  deepspeed_config: null
+
+# 保存和日志
+checkpoint:
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 3
+  resume_from_checkpoint: null
+
+logging:
+  log_level: "info"
+  log_steps: 10
+  eval_steps: 200
+  use_wandb: false
+  wandb_project: "pocketllm"
+  wandb_run_name: "sft"
+
+# 硬件配置
+hardware:
+  device: "cuda"
+  seed: 42
