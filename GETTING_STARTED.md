@@ -95,7 +95,7 @@ OpRegistry::Register("MatMul", GPUMatMul);
 ## 下一步计划
 
 ### Phase 1: 训练流程（优先级最高）
-- [ ] 实现分词器（SentencePiece）
+- [x] 实现分词器（词表 6400，BPE）
 - [ ] 实现数据加载器
 - [ ] 实现预训练脚本
 - [ ] 在小数据集上验证
@@ -120,6 +120,21 @@ OpRegistry::Register("MatMul", GPUMatMul);
 - [ ] 端到端测试
 
 ## 快速开始（当前可用）
+
+### 测试分词器
+
+```python
+from model.tokenizer import Tokenizer
+
+# 加载分词器
+tokenizer = Tokenizer("./tokenizer")
+
+# 编码
+text = "你好，世界！Hello, World!"
+token_ids = tokenizer.encode(text)
+print(f"Token IDs: {token_ids}")
+print(f"Vocab size: {tokenizer.get_vocab_size()}")  # 6400
+```
 
 ### 创建模型
 
@@ -148,12 +163,13 @@ print("Available FFN:", list(LayerRegistry._ffn_registry.keys()))
 
 ## 项目统计
 
-- **Python 文件**: 11 个
+- **Python 文件**: 12 个（新增分词器）
 - **C++ 头文件**: 5 个
-- **文档**: 5 个
+- **文档**: 6 个（新增分词器文档）
 - **配置文件**: 3 个
-- **代码行数**: ~2000+ 行
+- **代码行数**: ~2500+ 行
 - **预定义模型配置**: 3 个（Tiny/Small/Base）
+- **分词器**: 词表 6400，文件 460KB
 
 ## 设计原则
 
