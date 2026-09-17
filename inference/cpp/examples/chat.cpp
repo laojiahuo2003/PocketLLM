@@ -82,7 +82,9 @@ int main(int argc, char** argv) {
         // 获取用户输入
         std::cout << "👤 You: ";
         std::string user_input;
-        std::getline(std::cin, user_input);
+        if (!std::getline(std::cin, user_input)) {
+            break;  // EOF/输入结束
+        }
 
         if (user_input.empty()) {
             continue;

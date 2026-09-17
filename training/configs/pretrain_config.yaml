@@ -19,15 +19,15 @@ model:
 data:
   train_file: "training/data/pretrain_t2t_mini.jsonl"
   eval_file: "training/data/pretrain_t2t_smoke.jsonl"
-  max_length: 512
+  max_length: 340  # 对齐 MiniMind（中文 1token≈1.5~1.7 字符，340 ≈ 550 字符）
   num_workers: 4
 
 # 训练配置
 training:
   output_dir: "training/checkpoints/pretrain"
   num_epochs: 2
-  batch_size: 8
-  gradient_accumulation_steps: 4  # 有效 batch size = 8 * 4 = 32
+  batch_size: 32
+  gradient_accumulation_steps: 8  # 有效 batch size = 8 * 4 = 32
   learning_rate: 5.0e-4
   weight_decay: 0.01
   warmup_steps: 500

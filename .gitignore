@@ -30,6 +30,7 @@ MANIFEST
 # 模型权重和检查点
 checkpoints/*
 !checkpoints/.gitkeep
+training/checkpoints/
 outputs/
 runs/
 logs/
@@ -53,18 +54,15 @@ inference/cpp/cmake-build-*/
 *.dll
 *.exe
 
-# Android
-android/.gradle/
-android/.idea/
-android/local.properties
-android/*/build/
-android/*/.cxx/
-android/captures/
-*.apk
-*.aab
-*.ap_
-*.dex
-*.class
+# 导出的移动端模型二进制（由 export_to_pllm.py 重新生成）
+*.pllm
+
+# Android（mobile/android/）
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/engine/build-arm64/
+mobile/android/engine/CMakeCache.txt
 
 # IDE
 .vscode/

@@ -16,7 +16,17 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+# 添加项目根目录到 sys.path（脚本位于 tools/，确保能 import training 包）
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Pocket 是自定义架构，需注册到 transformers 的 auto mapping 后才能用 AutoModelForCausalLM 加载
+from training.model.architectures.pocket_hf import PocketConfig, PocketForCausalLM
+
+AutoConfig.register("pocket", PocketConfig)
+AutoModelForCausalLM.register(PocketConfig, PocketForCausalLM)
 
 
 class QuantType:
@@ -30,6 +40,41 @@ class QuantType:
 def quantize_f16(tensor: np.ndarray) -> bytes:
     """Convert float32 to float16."""
     return tensor.astype(np.float16).tobytes()
+
+
+def build_byte_decoder():
+    """
+    构建 GPT-2 风格字节级 BPE 的 unicode -> byte 反向映射。
+
+    get_vocab() 返回的 token 是"原始字节"经 bytes_to_unicode 映射成的一个个单字符
+    （例如中文 '人' 的 3 个字节 E4 BA BA 被映射成 'ä½' 之类的字符串）。
+    直接对它 .encode('utf-8') 会把已经映射过的字符再次编码，导致双重编码乱码。
+    这里把每个字符反映射回原始字节，才能得到可在 C++ 端正确拼回文本的字节序列。
+    """
+    bs = list(range(ord("!"), ord("~") + 1)) + \
+         list(range(ord("\xA1"), ord("\xAC") + 1)) + \
+         list(range(ord("\xAE"), ord("\xFF") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(2 ** 8):
+        if b not in bs:
+            bs.append(b)
+            cs.append(2 ** 8 + n)
+            n += 1
+    # byte(bs[i]) -> unicode(cs[i])；反向：unicode -> byte
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+def raw_vocab_bytes(tokenizer, tokens):
+    """把 get_vocab() 拿到的 token 列表转换为真实原始字节序列列表。"""
+    byte_decoder = build_byte_decoder()
+    out = []
+    for t in tokens:
+        try:
+            out.append(bytes(byte_decoder[c] for c in t))
+        except KeyError:
+            out.append(t.encode("utf-8"))  # 特殊 token 兜底
+    return out
 
 
 def quantize_q8_0(tensor: np.ndarray) -> bytes:
@@ -185,10 +230,10 @@ class PLLMExporter:
             "pad_token_id": getattr(self.config, "pad_token_id", -1),
         }
 
-        # Vocabulary
+        # Vocabulary（字节级 BPE：反映射为真实原始字节）
         vocab = self.tokenizer.get_vocab()
         vocab_list = sorted(vocab.items(), key=lambda x: x[1])
-        vocab_tokens = [token for token, _ in vocab_list]
+        vocab_tokens = raw_vocab_bytes(self.tokenizer, [token for token, _ in vocab_list])
 
         # Special tokens
         special_tokens = {
@@ -201,6 +246,7 @@ class PLLMExporter:
         header = {
             "config": config_dict,
             "vocab": vocab_tokens,
+            "vocab_size": len(vocab_tokens),
             "special_tokens": special_tokens,
             "tokenizer_type": "bpe",  # Assume BPE for now
         }
@@ -212,41 +258,15 @@ class PLLMExporter:
         tensors = []
         state_dict = self.model.state_dict()
 
-        # Map HuggingFace names to .pllm names
-        name_mapping = {
-            "model.embed_tokens.weight": "embedding.weight",
-            "model.norm.weight": "output_norm.weight",
-            "lm_head.weight": "lm_head.weight",
-        }
+        # 直接沿用 HuggingFace 命名：这个命名正好就是 C++ 引擎 get_tensor() 期望的名字
+        # (model.embed_tokens.weight / model.layers.N.self_attn.q_proj.weight /
+        #  model.norm.weight / lm_head.weight)。只需跳过 RoPE 等非权重 buffer。
+        skip_rotary = (".cos_cached", ".sin_cached", ".inv_freq")
 
         for name, tensor in state_dict.items():
-            # Handle transformer layers
-            if "model.layers." in name:
-                # Extract layer number
-                parts = name.split(".")
-                layer_idx = parts[2]
-                rest = ".".join(parts[3:])
-
-                # Map component names
-                component_map = {
-                    "input_layernorm.weight": "attn_norm.weight",
-                    "self_attn.q_proj.weight": "attn.q_proj.weight",
-                    "self_attn.k_proj.weight": "attn.k_proj.weight",
-                    "self_attn.v_proj.weight": "attn.v_proj.weight",
-                    "self_attn.o_proj.weight": "attn.o_proj.weight",
-                    "post_attention_layernorm.weight": "ffn_norm.weight",
-                    "mlp.gate_proj.weight": "ffn.gate_proj.weight",
-                    "mlp.up_proj.weight": "ffn.up_proj.weight",
-                    "mlp.down_proj.weight": "ffn.down_proj.weight",
-                }
-
-                if rest in component_map:
-                    new_name = f"layers.{layer_idx}.{component_map[rest]}"
-                    tensors.append((new_name, tensor))
-
-            # Handle other weights
-            elif name in name_mapping:
-                tensors.append((name_mapping[name], tensor))
+            # 跳过 RoPE 缓存 buffer（非可学习参数）
+            if all(k not in name for k in skip_rotary):
+                tensors.append((name, tensor))
 
         # Sort by name for consistency
         tensors.sort(key=lambda x: x[0])
@@ -261,8 +281,6 @@ class PLLMExporter:
         # Build header
         print("Building header...")
         header = self._build_header()
-        header_json = json.dumps(header, ensure_ascii=False)
-        header_bytes = header_json.encode('utf-8')
 
         # Collect and quantize tensors
         print("Collecting tensors...")
@@ -295,34 +313,50 @@ class PLLMExporter:
             # 2. Version (uint32, little-endian)
             f.write(struct.pack('<I', 1))
 
-            # 3. Header size (uint32)
-            f.write(struct.pack('<I', len(header_bytes)))
+            # 3. Header size (uint32): config + vocab 段的字节数
+            config_flat = header["config"]
+            config_bytes = json.dumps(config_flat, ensure_ascii=False).encode('utf-8')
+            vocab_bytes = b''.join(
+                struct.pack('<I', len(tok_bytes)) + tok_bytes
+                for tok_bytes in header["vocab"]
+            )
+            # 布局：config_size(uint32) + config_json + vocab_size(uint32) + vocab段
+            config_section = struct.pack('<I', len(config_bytes)) + config_bytes
+            vocab_section = struct.pack('<I', header["vocab_size"]) + vocab_bytes
+            header_data = config_section + vocab_section
+            f.write(struct.pack('<I', len(header_data)))
 
-            # 4. Header (JSON)
-            f.write(header_bytes)
+            # 4. Header: config + vocab
+            f.write(config_section)
+            f.write(vocab_section)
 
             # 5. Number of tensors (uint32)
             f.write(struct.pack('<I', len(tensors)))
 
-            # 6. Tensor metadata
+            # 6. Tensor metadata（data 区起始位置，offset 相对 data 区）
+            data_start = f.tell()
+            running_offset = 0
             for meta in tensor_metadata:
                 # Name length + name
                 name_bytes = meta["name"].encode('utf-8')
                 f.write(struct.pack('<I', len(name_bytes)))
                 f.write(name_bytes)
 
-                # Shape (rank + dimensions)
+                # Shape (rank + dimensions, uint32 each —— 与 C++ 读取一致)
                 f.write(struct.pack('<I', len(meta["shape"])))
                 for dim in meta["shape"]:
                     f.write(struct.pack('<I', dim))
 
-                # Data type (uint32)
+                # Quant type (uint32 —— 与 C++ 读取一致)
                 f.write(struct.pack('<I', meta["dtype"]))
 
+                # Data offset (uint64) 相对 data 区
+                f.write(struct.pack('<Q', running_offset))
                 # Data size (uint64)
                 f.write(struct.pack('<Q', meta["size"]))
+                running_offset += meta["size"]
 
-            # 7. Tensor data
+            # 7. Tensor data（连续排列）
             for data in tensor_data:
                 f.write(data)
 

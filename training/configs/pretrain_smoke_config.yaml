@@ -1,0 +1,66 @@
+# PocketLLM 预训练冒烟配置（用于跑通全流程，非正式训练）
+
+# 模型配置（缩小版，加快冒烟验证）
+model:
+  architecture: "llama_like"
+  vocab_size: 6400
+  hidden_size: 256
+  num_layers: 4
+  num_attention_heads: 4
+  num_key_value_heads: 2  # GQA
+  intermediate_size: 512
+  max_position_embeddings: 512
+  rope_theta: 10000.0
+  rms_norm_eps: 1.0e-6
+  hidden_act: "silu"
+  tie_word_embeddings: false
+
+# 数据配置（用冒烟数据）
+data:
+  train_file: "training/data/pretrain_t2t_smoke.jsonl"
+  eval_file: "training/data/pretrain_t2t_smoke.jsonl"
+  max_length: 256
+  num_workers: 2
+
+# 训练配置
+training:
+  output_dir: "training/checkpoints/pretrain"
+  num_epochs: 2
+  batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 5.0e-4
+  weight_decay: 0.01
+  warmup_steps: 20
+  max_grad_norm: 1.0
+
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+
+  lr_scheduler: "cosine"
+  lr_scheduler_kwargs:
+    num_cycles: 0.5
+
+  fp16: false
+  bf16: true
+
+  use_deepspeed: false
+  deepspeed_config: null
+
+# 冒烟阶段不连 SwanLab，避免卡在登录
+logging:
+  log_level: "info"
+  log_steps: 5
+  eval_steps: 500
+  use_swanlab: false
+
+checkpoint:
+  save_strategy: "steps"
+  save_steps: 1000
+  save_total_limit: 3
+  resume_from_checkpoint: null
+
+hardware:
+  device: "cuda"
+  seed: 42

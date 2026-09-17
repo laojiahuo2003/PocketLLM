@@ -98,7 +98,7 @@ class SFTDataset(Dataset):
         return text
 
     def _format_conversations(self, conversations):
-        """格式化对话数据"""
+        """格式化对话数据（模板与 C++ pocket-chat 推理端一致：User: ... / Assistant: ...）"""
         formatted_text = ""
 
         for turn in conversations:
@@ -106,10 +106,10 @@ class SFTDataset(Dataset):
             content = turn.get('content', '')
 
             if role == 'user':
-                formatted_text += f"### User:\n{content}\n\n"
+                formatted_text += f"User: {content}\n"
             elif role == 'assistant':
-                formatted_text += f"### Assistant:\n{content}\n\n"
+                formatted_text += f"Assistant: {content}\n"
             else:
-                formatted_text += f"### {role.capitalize()}:\n{content}\n\n"
+                formatted_text += f"{role.capitalize()}: {content}\n"
 
         return formatted_text.strip()

@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <unordered_map>
+#include <utility>
 
 namespace pocket {
 
@@ -143,8 +145,9 @@ private:
     token_t eos_token_ = 2;
     token_t pad_token_ = 0;
 
-    // BPE merge rules (简化版)
-    // TODO: 完整实现
+    // 编码辅助缓存
+    std::unordered_map<std::string, token_t> id_map_;
+    std::vector<std::pair<std::string, token_t>> tokens_desc_; // 按 token 长度降序
 };
 
 // ============================================================================
@@ -195,10 +198,16 @@ public:
     // 获取张量
     const Tensor* get_tensor(const std::string& name) const;
 
+    // 词表（从 .pllm 文件解析）
+    const std::vector<std::string>& vocab() const { return vocab_; }
+    size_t vocab_size() const { return vocab_.size(); }
+
 private:
     ModelConfig config_;
     std::vector<Tensor> tensors_;
-    std::vector<uint8_t> weights_data_;  // 所有权重数据
+    std::vector<uint8_t> weights_data_;           // 所有权重原始数据（fp16/量化块）
+    std::vector<std::vector<float>> dequant_data_; // 反量化后的 fp32 权重（与 tensors_ 一一对应）
+    std::vector<std::string> vocab_;               // 词表 tokens
 
     // 内部前向传播函数
     void embedding(const std::vector<token_t>& input_ids, float* output);

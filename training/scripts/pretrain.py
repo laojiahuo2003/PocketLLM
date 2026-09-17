@@ -8,6 +8,7 @@ PocketLLM 预训练脚本
 import os
 import sys
 import argparse
+import contextlib
 import yaml
 import torch
 import torch.nn as nn
@@ -112,14 +113,20 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
     max_grad_norm = config['training']['max_grad_norm']
     log_steps = config['logging']['log_steps']
 
+    # 混合精度上下文（在函数内构造，避免依赖 main 作用域）
+    use_amp = config['training']['bf16'] or config['training']['fp16']
+    dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
+    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
+
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
     for batch_idx, batch in enumerate(pbar):
         input_ids = batch['input_ids'].to(device)
         labels = batch['labels'].to(device)
 
-        # 前向传播
-        logits, _ = model(input_ids, use_cache=False)
+        # 前向传播（bf16/fp16 混合精度）
+        with autocast:
+            logits, _ = model(input_ids, use_cache=False)
 
         # 计算损失
         loss = nn.functional.cross_entropy(
@@ -255,10 +262,11 @@ def main():
     model, model_config = create_model(config['model'])
     model = model.to(device)
 
-    # 启用混合精度
+    # 启用混合精度（模型自动转为 bf16/fp16 计算）
     use_amp = config['training']['bf16'] or config['training']['fp16']
     dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp and config['training']['fp16'])
+    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
 
     # 创建数据集
     logger.info("Loading dataset...")

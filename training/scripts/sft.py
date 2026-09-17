@@ -8,6 +8,7 @@ PocketLLM SFT (Supervised Fine-Tuning) 训练脚本
 import os
 import sys
 import argparse
+import contextlib
 import yaml
 import torch
 import torch.nn as nn
@@ -118,14 +119,20 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
     max_grad_norm = config['training']['max_grad_norm']
     log_steps = config['logging']['log_steps']
 
+    # 混合精度上下文（函数内构造，避免依赖 main 作用域）
+    use_amp = config['training']['bf16'] or config['training']['fp16']
+    dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
+    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
+
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
     for batch_idx, batch in enumerate(pbar):
         input_ids = batch['input_ids'].to(device)
         labels = batch['labels'].to(device)
 
-        # 前向传播
-        logits, _ = model(input_ids, use_cache=False)
+        # 前向传播（bf16/fp16 混合精度）
+        with autocast:
+            logits, _ = model(input_ids, use_cache=False)
 
         # 计算损失
         loss = nn.functional.cross_entropy(
@@ -154,7 +161,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
 
             # 日志
             if step % log_steps == 0:
-                avg_loss = total_loss / step
+                avg_loss = total_loss / (batch_idx + 1)  # 除以累计 batch 数（原实现误除以 optimizer 步数，放大 4 倍）
                 current_lr = optimizer.param_groups[0]['lr']
                 pbar.set_postfix({
                     'loss': f'{avg_loss:.4f}',
@@ -170,21 +177,26 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
                         'train/step': step
                     })
 
-    return total_loss / step
+    return total_loss / len(train_loader)  # 平均到所有 batch
 
 
-def evaluate(model, eval_loader, device):
+def evaluate(model, eval_loader, device, config):
     """评估模型"""
     model.eval()
     total_loss = 0
     total_steps = 0
+
+    use_amp = config['training']['bf16'] or config['training']['fp16']
+    dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
+    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
 
     with torch.no_grad():
         for batch in tqdm(eval_loader, desc="Evaluating"):
             input_ids = batch['input_ids'].to(device)
             labels = batch['labels'].to(device)
 
-            logits, _ = model(input_ids, use_cache=False)
+            with autocast:
+                logits, _ = model(input_ids, use_cache=False)
 
             loss = nn.functional.cross_entropy(
                 logits.view(-1, logits.size(-1)),
@@ -284,6 +296,9 @@ def main():
 
     # 启用混合精度
     use_amp = config['training']['bf16'] or config['training']['fp16']
+    dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and config['training']['fp16'])
+    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
 
     # 创建数据集
     logger.info("Loading dataset...")
@@ -353,7 +368,7 @@ def main():
 
         # 评估
         if eval_loader is not None:
-            eval_loss = evaluate(model, eval_loader, device)
+            eval_loss = evaluate(model, eval_loader, device, config)
             logger.info(f"Epoch {epoch + 1} - Eval Loss: {eval_loss:.4f}")
 
             # SwanLab 记录评估指标

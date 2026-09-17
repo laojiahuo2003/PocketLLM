@@ -110,16 +110,24 @@ class MultiHeadAttention(BaseAttentionLayer):
 
         past_key_value = (key_states, value_states) if use_cache else None
 
-        # 注意力计算
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
+        # 注意力计算（SDPA：避免物化分数矩阵）
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = F.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-
-        attn_output = torch.matmul(attn_weights, value_states)
+            if attention_mask.dim() == 2:
+                attn_mask = attention_mask[:, None, None, :]
+            else:
+                attn_mask = attention_mask
+            attn_output = F.scaled_dot_product_attention(
+                query_states, key_states, value_states,
+                attn_mask=attn_mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                query_states, key_states, value_states,
+                dropout_p=0.0,
+                is_causal=True,
+            )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
 
         # 输出投影
@@ -185,16 +193,26 @@ class GroupedQueryAttention(BaseAttentionLayer):
         key_states = key_states.repeat_interleave(self.num_key_value_groups, dim=1)
         value_states = value_states.repeat_interleave(self.num_key_value_groups, dim=1)
 
-        # 注意力计算（与标准 MHA 相同）
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
+        # 注意力计算（SDPA：Ampere 上自动走 flash / memory-efficient 内核，
+        # 避免物化 512×512 分数矩阵，显著降低显存与算力开销）
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = F.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-
-        attn_output = torch.matmul(attn_weights, value_states)
+            # 兼容 [B, S] 的 0/1 mask 或 [B, 1, S, S] 的加性 mask
+            if attention_mask.dim() == 2:
+                attn_mask = attention_mask[:, None, None, :]  # [B,1,1,S]
+            else:
+                attn_mask = attention_mask
+            attn_output = F.scaled_dot_product_attention(
+                query_states, key_states, value_states,
+                attn_mask=attn_mask,
+                dropout_p=0.0,
+                is_causal=False,
+            )
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                query_states, key_states, value_states,
+                dropout_p=0.0,
+                is_causal=True,
+            )
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_size)
 
         # 输出投影

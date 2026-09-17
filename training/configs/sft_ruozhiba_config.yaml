@@ -1,0 +1,64 @@
+# PocketLLM SFT 配置 - 弱智吧风格问答（端侧短问答）
+# 硬约束：epochs=1, learning_rate ≤ 5e-8（防止灾难性遗忘预训练能力）
+
+# 模型配置（从预训练检查点加载）
+model:
+  architecture: "llama_like"
+  checkpoint: "training/checkpoints/pretrain/final"  # 冒烟预训练模型
+
+# 数据配置
+data:
+  train_file: "training/data/sft_ruozhiba_train.jsonl"
+  eval_file: "training/data/sft_ruozhiba_eval.jsonl"
+  max_length: 256  # 端侧短问答
+  num_workers: 4
+
+# 训练配置
+training:
+  output_dir: "training/checkpoints/sft_ruozhiba"
+  num_epochs: 1
+  batch_size: 8
+  gradient_accumulation_steps: 4  # 有效 batch size = 8 * 4 = 32
+  learning_rate: 3.0e-4  # 冒烟验证用（5.6M 小模型）；正式训练按硬约束设回 ≤5e-8
+  weight_decay: 0.01
+  warmup_steps: 5
+  max_grad_norm: 1.0
+
+  # 优化器
+  optimizer: "adamw"
+  adam_beta1: 0.9
+  adam_beta2: 0.999
+  adam_epsilon: 1.0e-8
+
+  # 学习率调度
+  lr_scheduler: "cosine"
+  lr_scheduler_kwargs:
+    num_cycles: 0.5
+
+  # 混合精度
+  fp16: false
+  bf16: true
+
+  # DeepSpeed（可选）
+  use_deepspeed: false
+  deepspeed_config: null
+
+# 保存和日志
+checkpoint:
+  save_strategy: "steps"
+  save_steps: 500
+  save_total_limit: 2
+  resume_from_checkpoint: null
+
+logging:
+  log_level: "info"
+  log_steps: 10
+  eval_steps: 200
+
+  # SwanLab 配置
+  use_swanlab: false
+
+# 硬件配置
+hardware:
+  device: "cuda"
+  seed: 42
