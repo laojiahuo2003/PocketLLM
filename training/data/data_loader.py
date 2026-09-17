@@ -10,8 +10,11 @@ PocketLLM 数据加载器
 import os
 import json
 import random
+import numpy as np
 import torch
+from pathlib import Path
 from torch.utils.data import Dataset
+from tqdm import tqdm
 from datasets import load_dataset, Features, Sequence, Value
 
 # 禁用 tokenizers 并行警告
@@ -74,59 +77,140 @@ def postprocess_prompt(prompt_content, empty_think_ratio=0.2):
 
 class PretrainDataset(Dataset):
     """
-    预训练数据集
+    预训练数据集（预 tokenize + 磁盘缓存 + 可选 packing）
 
     数据格式：
-    {"text": "这是一段文本..."}
+        {"text": "这是一段文本..."}
+
+    切分模式（config: data.pack）：
+        pack=False  每个样本独立，不足 max_length 用 pad 补齐（与 MiniMind 行为一致）
+        pack=True   所有文档用 EOS 拼接后按 max_length 切块，无 pad 浪费（推荐）
+
+    关键改动：首次运行把全量 tokenize 结果缓存成 .npy，之后 mmap 读取。
+    原实现在每个 epoch 对每条样本重新 tokenize（8M 样本 × 2 epoch = 1600+ 万次），
+    且每次都走 HF datasets 的随机访问，是纯重复劳动。
+
+    注意：pack=True 时文档间会互相 attend（GPT/Llama 的标准做法），
+    与 MiniMind 的「每样本独立 padding」不是同一数据分布，做对照实验时要留意。
     """
 
-    def __init__(self, data_path, tokenizer, max_length=512):
+    def __init__(self, data_path, tokenizer, max_length=512, pack=False, cache_dir=None):
         """
         Args:
             data_path: JSONL 文件路径
             tokenizer: 分词器
             max_length: 最大序列长度
+            pack: 是否把所有文档拼接切块（消除 padding 浪费）
+            cache_dir: tokenize 缓存目录，默认 data_path 同级 .token_cache
+                       —— 大数据建议指到本地盘，别放网络挂载点
         """
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.pack = pack
 
-        # 加载数据集
-        print(f"Loading pretrain dataset from {data_path}...")
-        self.samples = load_dataset('json', data_files=data_path, split='train')
-        print(f"Loaded {len(self.samples)} samples")
+        self.bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
+        self.eos_id = tokenizer.eos_token_id
+        self.pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+
+        data_path = Path(data_path)
+        cache_dir = Path(cache_dir) if cache_dir else data_path.parent / ".token_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        tag = f"{data_path.stem}.v{tokenizer.get_vocab_size()}.L{max_length}.{'pack' if pack else 'pad'}"
+        flat_path = cache_dir / f"{tag}.tokens.npy"
+        off_path = cache_dir / f"{tag}.offsets.npy"
+
+        if flat_path.exists() and off_path.exists():
+            print(f"✓ Token 缓存命中: {flat_path}")
+        else:
+            print(f"预 tokenize {data_path} ...（只做一次，之后走缓存）")
+            self._build_cache(data_path, flat_path, off_path)
+
+        self.flat = np.load(flat_path, mmap_mode="r")
+        self.offsets = np.load(off_path, mmap_mode="r")
+
+        if self.pack:
+            self.n_items = len(self.flat) // self.max_length
+            print(f"✓ 已加载: {len(self.flat):,} tokens -> {self.n_items:,} 个定长块 (len={self.max_length})")
+        else:
+            self.n_items = len(self.offsets) - 1
+            print(f"✓ 已加载: {self.n_items:,} 条样本（缓存命中，未重新 tokenize）")
+
+    def _build_cache(self, data_path, flat_path, off_path):
+        """一次性 tokenize 全量数据，流式落盘（分块 flush 控制内存）"""
+        flat_tmp = str(flat_path) + ".tmp"
+        off_tmp = str(off_path) + ".tmp"
+        FLUSH = 1 << 21  # 每 ~200 万 token 落盘一次
+
+        buf, offsets, total = [], [0], 0
+        n_ok = 0
+
+        with open(data_path, "r", encoding="utf-8") as fin, open(flat_tmp, "wb") as fout:
+            for line in tqdm(fin, desc="tokenizing", unit="line"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    text = json.loads(line).get("text", "")
+                except json.JSONDecodeError:
+                    continue
+                if not text:
+                    continue
+
+                ids = self.tokenizer.encode(str(text), add_special_tokens=False)
+
+                if self.pack:
+                    ids = ids + [self.eos_id]
+                else:
+                    if len(ids) > self.max_length - 2:
+                        ids = ids[: self.max_length - 2]
+                    ids = [self.bos_id] + ids + [self.eos_id]
+
+                buf.extend(ids)
+                n_ok += 1
+                if not self.pack:
+                    offsets.append(total + len(buf))
+
+                if len(buf) >= FLUSH:
+                    np.asarray(buf, dtype=np.int32).tofile(fout)
+                    total += len(buf)
+                    buf = []
+
+            if buf:
+                np.asarray(buf, dtype=np.int32).tofile(fout)
+                total += len(buf)
+
+        os.replace(flat_tmp, flat_path)
+        np.asarray(offsets, dtype=np.int64).tofile(off_tmp)
+        os.replace(off_tmp, off_path)
+        print(f"✓ 缓存完成: {n_ok:,} 条样本 -> {total:,} tokens -> {flat_path}")
 
     def __len__(self):
-        return len(self.samples)
+        return self.n_items
 
     def __getitem__(self, index):
-        sample = self.samples[index]
+        if self.pack:
+            start = index * self.max_length
+            ids = np.asarray(self.flat[start:start + self.max_length], dtype=np.int64)
+            input_ids = torch.from_numpy(ids)
+            # 拼接块内没有 pad，全部位置都是有效 label
+            return {"input_ids": input_ids, "labels": input_ids.clone()}
 
-        # 分词
-        tokens = self.tokenizer.encode(
-            str(sample['text']),
-            add_special_tokens=False
-        )
+        start, end = int(self.offsets[index]), int(self.offsets[index + 1])
+        ids = np.asarray(self.flat[start:end], dtype=np.int64)
 
-        # 截断到 max_length - 2（留给 BOS/EOS）
-        if len(tokens) > self.max_length - 2:
-            tokens = tokens[:self.max_length - 2]
+        pad_len = self.max_length - len(ids)
+        if pad_len > 0:
+            ids = np.concatenate([ids, np.full(pad_len, self.pad_id, dtype=np.int64)])
+        else:
+            ids = ids[: self.max_length]
 
-        # 添加 BOS/EOS
-        tokens = [self.tokenizer.bos_token_id] + tokens + [self.tokenizer.eos_token_id]
-
-        # Padding
-        input_ids = tokens + [self.tokenizer.pad_token_id] * (self.max_length - len(tokens))
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
-
-        # Labels（padding 位置设为 -100）
+        input_ids = torch.from_numpy(ids)
         labels = input_ids.clone()
-        labels[input_ids == self.tokenizer.pad_token_id] = -100
+        labels[input_ids == self.pad_id] = -100
 
-        return {
-            'input_ids': input_ids,
-            'labels': labels
-        }
+        return {"input_ids": input_ids, "labels": labels}
 
 
 class SFTDataset(Dataset):

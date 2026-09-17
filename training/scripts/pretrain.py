@@ -103,59 +103,79 @@ def create_scheduler(optimizer, config, total_steps):
     return scheduler
 
 
-def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device, swanlab_run=None):
+def train_epoch(model, train_loader, optimizer, scheduler, scaler, config, epoch, device, swanlab_run=None):
     """训练一个 epoch"""
     model.train()
-    total_loss = 0
     step = 0
 
     gradient_accumulation_steps = config['training']['gradient_accumulation_steps']
     max_grad_norm = config['training']['max_grad_norm']
     log_steps = config['logging']['log_steps']
+    save_steps = config['checkpoint'].get('save_steps') or 0
 
     # 混合精度上下文（在函数内构造，避免依赖 main 作用域）
     use_amp = config['training']['bf16'] or config['training']['fp16']
     dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
     autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
+    use_scaler = scaler is not None and scaler.is_enabled()
+
+    # loss 累积放在 GPU 上，只在打日志时同步一次
+    # （原来的 loss.item() 每个 micro-batch 都强制 device->host 同步，会打断异步流水）
+    total_loss = torch.zeros((), device=device)
 
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
 
     for batch_idx, batch in enumerate(pbar):
-        input_ids = batch['input_ids'].to(device)
-        labels = batch['labels'].to(device)
+        input_ids = batch['input_ids'].to(device, non_blocking=True)
+        labels = batch['labels'].to(device, non_blocking=True)
 
         # 前向传播（bf16/fp16 混合精度）
         with autocast:
             logits, _ = model(input_ids, use_cache=False)
 
-        # 计算损失（next-token 预测：logs[i] 预测 input[i+1]，必须 shift labels）
+        # 混合精度自检：autocast 失效会让整条链路退化到 fp32（GEMM 慢约 8 倍）
+        if batch_idx == 0:
+            logger.info(
+                f"[AMP 自检] autocast={'on' if use_amp else 'off'} 请求 dtype={dtype} "
+                f"-> logits.dtype={logits.dtype}"
+            )
+
+        # 计算损失（next-token 预测：logits[i] 预测 input[i+1]，必须 shift labels）
         loss = nn.functional.cross_entropy(
             logits[..., :-1, :].contiguous().view(-1, logits.size(-1)),
             labels[..., 1:].contiguous().view(-1),
             ignore_index=-100
         )
 
-        # 梯度累积
-        loss = loss / gradient_accumulation_steps
-        loss.backward()
+        # 真实 loss 先记账（detach 后累积，不同步），再缩放后反传
+        total_loss += loss.detach()
 
-        total_loss += loss.item() * gradient_accumulation_steps
+        if use_scaler:
+            scaler.scale(loss / gradient_accumulation_steps).backward()
+        else:
+            (loss / gradient_accumulation_steps).backward()
 
         # 更新参数
         if (batch_idx + 1) % gradient_accumulation_steps == 0:
-            # 梯度裁剪
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            if use_scaler:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # 梯度裁剪
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                # 优化器步进
+                optimizer.step()
 
-            # 优化器步进
-            optimizer.step()
             scheduler.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             step += 1
 
             # 日志
             if step % log_steps == 0:
-                avg_loss = total_loss / (step * gradient_accumulation_steps)
+                avg_loss = (total_loss / (step * gradient_accumulation_steps)).item()
                 current_lr = optimizer.param_groups[0]['lr']
                 pbar.set_postfix({
                     'loss': f'{avg_loss:.4f}',
@@ -171,7 +191,12 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
                         'train/step': step
                     })
 
-    return total_loss / (step * gradient_accumulation_steps)
+            # 周期存盘（原来只在 epoch 结束存一次，长 epoch 中途崩了全丢）
+            if save_steps and step % save_steps == 0:
+                save_checkpoint(model, optimizer, scheduler, epoch, step, config)
+                logger.info(f"周期 checkpoint 已保存: epoch={epoch} step={step}")
+
+    return (total_loss / max(step * gradient_accumulation_steps, 1)).item()
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, step, config, is_best=False):
@@ -199,9 +224,9 @@ def save_checkpoint(model, optimizer, scheduler, epoch, step, config, is_best=Fa
         torch.save(checkpoint, best_path)
         logger.info(f"Saved best model to {best_path}")
 
-    # 清理旧检查点
+    # 清理旧检查点（按修改时间排序；按文件名排会把 epoch10 排到 epoch2 前面）
     save_total_limit = config['checkpoint']['save_total_limit']
-    checkpoints = sorted(output_dir.glob("checkpoint_*.pt"))
+    checkpoints = sorted(output_dir.glob("checkpoint_*.pt"), key=lambda p: p.stat().st_mtime)
     if len(checkpoints) > save_total_limit:
         for old_checkpoint in checkpoints[:-save_total_limit]:
             old_checkpoint.unlink()
@@ -265,23 +290,30 @@ def main():
     # 启用混合精度（模型自动转为 bf16/fp16 计算）
     use_amp = config['training']['bf16'] or config['training']['fp16']
     dtype = torch.bfloat16 if config['training']['bf16'] else torch.float16
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp and config['training']['fp16'])
-    autocast = torch.autocast(device_type='cuda', dtype=dtype) if use_amp else contextlib.nullcontext()
+    # 旧写法 torch.cuda.amp.GradScaler 已废弃；且 fp16 才需要 scaler，bf16 不需要。
+    # 原来建了 scaler 却从不使用，等于 fp16 模式下梯度缩放完全没生效。
+    scaler = torch.amp.GradScaler('cuda', enabled=use_amp and config['training']['fp16'])
 
     # 创建数据集
     logger.info("Loading dataset...")
     train_dataset = PretrainDataset(
         config['data']['train_file'],
         tokenizer,
-        max_length=config['data']['max_length']
+        max_length=config['data']['max_length'],
+        pack=config['data'].get('pack', False),
+        cache_dir=config['data'].get('cache_dir')
     )
 
+    num_workers = config['data']['num_workers']
     train_loader = DataLoader(
         train_dataset,
         batch_size=config['training']['batch_size'],
         shuffle=True,
-        num_workers=config['data']['num_workers'],
-        pin_memory=True
+        num_workers=num_workers,
+        pin_memory=config['data'].get('pin_memory', True),
+        persistent_workers=num_workers > 0,   # 避免每个 epoch 重新 fork 全部 worker
+        prefetch_factor=config['data'].get('prefetch_factor', 4) if num_workers > 0 else None,
+        drop_last=True,                       # 丢掉尾部不完整 batch，避免梯度累积组不齐
     )
 
     # 创建优化器
@@ -312,7 +344,7 @@ def main():
 
         # 训练
         avg_loss = train_epoch(
-            model, train_loader, optimizer, scheduler,
+            model, train_loader, optimizer, scheduler, scaler,
             config, epoch + 1, device, swanlab_run
         )
 

@@ -1,33 +1,37 @@
-# PocketLLM 预训练配置
+# PocketLLM 预训练配置 - 0.5B / 7G 全量数据 / 192G 大卡
 
-# 模型配置
+# 模型配置（0.5B：head_dim=96，与 C++ 引擎对齐，无需改引擎）
 model:
   architecture: "llama_like"
   vocab_size: 6400
-  hidden_size: 768
-  num_layers: 12
-  num_attention_heads: 12
-  num_key_value_heads: 4  # GQA
-  intermediate_size: 2048
+  hidden_size: 1536
+  num_layers: 16
+  num_attention_heads: 16   # head_dim = 1536/16 = 96，与 C++ 引擎一致
+  num_key_value_heads: 8    # GQA
+  intermediate_size: 4096
   max_position_embeddings: 2048
   rope_theta: 10000.0
   rms_norm_eps: 1.0e-6
   hidden_act: "silu"
   tie_word_embeddings: false
 
-# 数据配置
+# 数据配置（换成你的全量 7G 数据）
 data:
-  train_file: "training/data/pretrain_t2t_mini.jsonl"
+  train_file: /mnt/workspace/minimind_dataset/pretrain_t2t.jsonl   # 全量 7G 预训练数据（自己下载/放置）
   eval_file: "training/data/pretrain_t2t_smoke.jsonl"
-  max_length: 340  # 对齐 MiniMind（中文 1token≈1.5~1.7 字符，340 ≈ 550 字符）
-  num_workers: 4
+  max_length: 340  # pack=True 时 = 切块长度；中文 1token≈1.5~1.7 字符；0.5B 可提到 512-1024（大卡显存足够）
+  pack: true       # 文档拼接切块，消除 padding 算力浪费（首次运行会重建 tokenize 缓存，之后走缓存）
+  cache_dir: "/mnt/workspace/PocketLLM/training/data/.token_cache"  # 建议指向本地盘（非网络挂载）
+  num_workers: 8
+  pin_memory: true        # ROCm 上若数据管道成瓶颈，可先试 false
+  prefetch_factor: 4      # 每个 worker 预取的 batch 数（默认 2）
 
-# 训练配置
+# 训练配置（192G 大卡：batch 可开大、少用梯度累积）
 training:
-  output_dir: "training/checkpoints/pretrain"
+  output_dir: "training/checkpoints/pretrain_0_5b"   # 换新目录，避免覆盖原有 85M checkpoint
   num_epochs: 2
-  batch_size: 32
-  gradient_accumulation_steps: 8  # 有效 batch size = 8 * 4 = 32
+  batch_size: 512          # 大卡显存充足：大 batch 摊薄固定开销（实测 GEMM 效率 ~13%，小模型必须靠大 batch）
+  gradient_accumulation_steps: 1  # 有效 batch = 512
   learning_rate: 5.0e-4
   weight_decay: 0.01
   warmup_steps: 500
@@ -44,11 +48,11 @@ training:
   lr_scheduler_kwargs:
     num_cycles: 0.5
 
-  # 混合精度
+  # 混合精度（AMD MI 卡支持 bf16）
   fp16: false
-  bf16: true  # RTX 3080 支持 bf16
+  bf16: true
 
-  # DeepSpeed（可选）
+  # DeepSpeed（可选，单卡可不启用）
   use_deepspeed: false
   deepspeed_config: null
 
@@ -66,11 +70,11 @@ logging:
 
   # SwanLab 配置
   use_swanlab: true
-  swanlab_project: "pocketllm"
-  swanlab_run_name: "pretrain"
-  swanlab_api_key: "cr0yHWFKR2vT7NJyVebZI"  # 你的 API key
+  swanlab_project: "pocketllm-amd"
+  swanlab_run_name: "pt"
+  swanlab_api_key: "cr0yHWFKR2vT7NJyVebZI"
 
-# 硬件配置
+# 硬件配置（ROCm 下 "cuda" 自动映射到 AMD 卡）
 hardware:
   device: "cuda"
   seed: 42
