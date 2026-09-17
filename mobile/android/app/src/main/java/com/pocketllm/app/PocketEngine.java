@@ -26,7 +26,7 @@ public class PocketEngine {
     private static native void nativeRelease();
 
     /** 模型资源名（已打进 APK 的 assets/ 下） */
-    private static final String MODEL_ASSET = "pocket-0.1-sft-q8.pllm";
+    private static final String MODEL_ASSET = "minimind-768-q8.pllm";
 
     public interface Callback {
         void onResult(String text);

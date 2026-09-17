@@ -151,6 +151,10 @@ def get_batch_logps(logits, labels):
     Returns:
         logps: [batch_size] - 每个序列的平均对数概率
     """
+    # next-token 预测：logits[t] 预测 input[t+1]，labels 需同步 shift 1 位
+    logits = logits[:, :-1, :].contiguous()
+    labels = labels[:, 1:].contiguous()
+
     # 计算 log probabilities
     log_probs = F.log_softmax(logits, dim=-1)
 
@@ -163,7 +167,7 @@ def get_batch_logps(logits, labels):
 
     # 只对非 -100 的位置求平均（即只计算 response 部分）
     mask = (labels != -100).float()
-    logps = (per_token_logps * mask).sum(-1) / mask.sum(-1)
+    logps = (per_token_logps * mask).sum(-1) / mask.sum(-1).clamp(min=1)
 
     return logps
 
@@ -242,9 +246,9 @@ def train_epoch(policy_model, reference_model, train_loader, optimizer, schedule
 
             # 日志
             if step % log_steps == 0:
-                avg_loss = total_loss / step
-                avg_chosen_reward = total_chosen_rewards / step
-                avg_rejected_reward = total_rejected_rewards / step
+                avg_loss = total_loss / (step * gradient_accumulation_steps)
+                avg_chosen_reward = total_chosen_rewards / (step * gradient_accumulation_steps)
+                avg_rejected_reward = total_rejected_rewards / (step * gradient_accumulation_steps)
                 reward_margin = avg_chosen_reward - avg_rejected_reward
                 current_lr = optimizer.param_groups[0]['lr']
 
@@ -267,9 +271,9 @@ def train_epoch(policy_model, reference_model, train_loader, optimizer, schedule
                     })
 
     return {
-        'loss': total_loss / step,
-        'chosen_reward': total_chosen_rewards / step,
-        'rejected_reward': total_rejected_rewards / step
+        'loss': total_loss / (step * gradient_accumulation_steps),
+        'chosen_reward': total_chosen_rewards / (step * gradient_accumulation_steps),
+        'rejected_reward': total_rejected_rewards / (step * gradient_accumulation_steps)
     }
 
 

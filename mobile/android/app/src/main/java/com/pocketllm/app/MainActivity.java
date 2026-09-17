@@ -2,6 +2,7 @@ package com.pocketllm.app;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -34,16 +35,22 @@ public class MainActivity extends Activity {
     }
 
     private void buildUI() {
-        ScrollView scroll = new ScrollView(this);
+        // 外层垂直布局：上面是可滚动的聊天区(占满剩余空间)，下面固定输入行
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
+        // 聊天区：ScrollView 占满权重，内部放一个 wrap 高度的 TextView
+        ScrollView scroll = new ScrollView(this);
         logView = new TextView(this);
         logView.setTextSize(16);
         logView.setPadding(24, 24, 24, 24);
-        root.addView(logView, new LinearLayout.LayoutParams(
+        scroll.addView(logView, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+        root.addView(scroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        // 输入行
         input = new EditText(this);
         input.setHint("输入你的杠精问题...");
         input.setSingleLine(true);
@@ -63,8 +70,7 @@ public class MainActivity extends Activity {
         row.addView(send, new LinearLayout.LayoutParams(0, -2, 0.3f));
         root.addView(row);
 
-        scroll.addView(root);
-        setContentView(scroll);
+        setContentView(root);
     }
 
     private void loadModel() {
@@ -72,31 +78,48 @@ public class MainActivity extends Activity {
         engine.load(new Runnable() {
             @Override
             public void run() {
+                Log.d("PocketUI", "load onReady");
                 append("模型就绪 ✓ 开始聊天！");
             }
         }, new Runnable() {
             @Override
             public void run() {
+                Log.e("PocketUI", "load onError");
                 Toast.makeText(MainActivity.this, "模型加载失败", Toast.LENGTH_LONG).show();
                 append("[加载失败] 请检查 APK 内是否含 .pllm");
             }
         });
     }
 
+    // ---- 文件日志（避免 logcat 抓不到，供 run-as cat 排查）----
+    private void fileLog(String msg) {
+        try {
+            java.io.FileOutputStream f = openFileOutput("log.txt", MODE_APPEND);
+            f.write((System.currentTimeMillis() + " " + msg + "\n").getBytes());
+            f.close();
+        } catch (Exception e) { }
+    }
+
     private void onSend() {
         final String q = input.getText().toString().trim();
+        fileLog("onSend q=[" + q + "] enabled=" + send.isEnabled());
         if (q.isEmpty() || send.isEnabled() == false) {
+            fileLog("onSend EARLY-RETURN");
             return;
         }
         input.setText("");
         append("👤 " + q);
         append("🤖 思考中...");
+        render();
+        fileLog("echo rendered, calling generate");
         send.setEnabled(false);
         engine.generate(q, 60, new PocketEngine.Callback() {
             @Override
             public void onResult(String text) {
+                fileLog("onResult len=" + (text == null ? -1 : text.length()) + " text=[" + text + "]");
                 send.setEnabled(true);
-                pendingToReply("🤖 " + text.trim());
+                pendingToReply("🤖 " + (text == null ? "[空]" : text.trim()));
+                fileLog("reply rendered");
             }
         });
     }

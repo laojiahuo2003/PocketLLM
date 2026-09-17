@@ -44,6 +44,7 @@ class PocketConfig(PretrainedConfig):
         tie_word_embeddings=False,
         rope_theta=10000.0,
         attention_dropout=0.0,
+        qk_norm=False,
         **kwargs,
     ):
         super().__init__(
@@ -67,6 +68,8 @@ class PocketConfig(PretrainedConfig):
         self.use_cache = use_cache
         self.rope_theta = rope_theta
         self.attention_dropout = attention_dropout
+        # QK-norm：对每个 head 的 q/k 做 RMSNorm（MiniMind 风格），默认关闭
+        self.qk_norm = qk_norm
 
         # 计算 head_dim
         self.head_dim = self.hidden_size // self.num_attention_heads
@@ -125,8 +128,7 @@ class RotaryEmbedding(nn.Module):
         self.base = base
 
         # 计算频率
-        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer("inv_freq", self._compute_inv_freq(device), persistent=False)
 
         # 预计算 cos 和 sin
         self._set_cos_sin_cache(
@@ -134,6 +136,9 @@ class RotaryEmbedding(nn.Module):
             device=self.inv_freq.device,
             dtype=torch.get_default_dtype()
         )
+
+    def _compute_inv_freq(self, device=None):
+        return 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
 
     def _set_cos_sin_cache(self, seq_len, device, dtype):
         self.max_seq_len_cached = seq_len
@@ -147,6 +152,12 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self, x, seq_len=None):
         # x: [bs, num_attention_heads, seq_len, head_size]
+        # 兜底：部分加载路径（meta device / 非持久 buffer）不会恢复 inv_freq，
+        # 会残留未初始化内存。inv_freq[0] 必为 base^0 = 1.0，以此校验并重算。
+        if not torch.isfinite(self.inv_freq).all() or self.inv_freq[0].item() != 1.0:
+            self.inv_freq = self._compute_inv_freq(x.device)
+            self._set_cos_sin_cache(seq_len=self.max_position_embeddings, device=x.device, dtype=x.dtype)
+
         if seq_len > self.max_seq_len_cached:
             self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
 
@@ -198,6 +209,11 @@ class PocketAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
 
+        # QK-norm（MiniMind 风格）：按 head 归一化，需在 RoPE 之前应用
+        if config.qk_norm:
+            self.q_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+            self.k_norm = RMSNorm(self.head_dim, eps=config.rms_norm_eps)
+
         self.rotary_emb = RotaryEmbedding(
             self.head_dim,
             max_position_embeddings=self.max_position_embeddings,
@@ -221,6 +237,11 @@ class PocketAttention(nn.Module):
         query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
         key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
         value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+
+        # QK-norm：按 head 归一化（head_dim 维度），必须在 RoPE 之前
+        if self.config.qk_norm:
+            query_states = self.q_norm(query_states)
+            key_states = self.k_norm(key_states)
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:

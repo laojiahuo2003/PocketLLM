@@ -134,10 +134,10 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
         with autocast:
             logits, _ = model(input_ids, use_cache=False)
 
-        # 计算损失
+        # 计算损失（next-token 预测，必须 shift labels）
         loss = nn.functional.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1),
+            logits[..., :-1, :].contiguous().view(-1, logits.size(-1)),
+            labels[..., 1:].contiguous().view(-1),
             ignore_index=-100
         )
 
@@ -199,8 +199,8 @@ def evaluate(model, eval_loader, device, config):
                 logits, _ = model(input_ids, use_cache=False)
 
             loss = nn.functional.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                labels.view(-1),
+                logits[..., :-1, :].contiguous().view(-1, logits.size(-1)),
+                labels[..., 1:].contiguous().view(-1),
                 ignore_index=-100
             )
 

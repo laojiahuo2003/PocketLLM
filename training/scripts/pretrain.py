@@ -128,10 +128,10 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
         with autocast:
             logits, _ = model(input_ids, use_cache=False)
 
-        # 计算损失
+        # 计算损失（next-token 预测：logs[i] 预测 input[i+1]，必须 shift labels）
         loss = nn.functional.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1),
+            logits[..., :-1, :].contiguous().view(-1, logits.size(-1)),
+            labels[..., 1:].contiguous().view(-1),
             ignore_index=-100
         )
 
@@ -155,7 +155,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
 
             # 日志
             if step % log_steps == 0:
-                avg_loss = total_loss / step
+                avg_loss = total_loss / (step * gradient_accumulation_steps)
                 current_lr = optimizer.param_groups[0]['lr']
                 pbar.set_postfix({
                     'loss': f'{avg_loss:.4f}',
@@ -171,7 +171,7 @@ def train_epoch(model, train_loader, optimizer, scheduler, config, epoch, device
                         'train/step': step
                     })
 
-    return total_loss / step
+    return total_loss / (step * gradient_accumulation_steps)
 
 
 def save_checkpoint(model, optimizer, scheduler, epoch, step, config, is_best=False):

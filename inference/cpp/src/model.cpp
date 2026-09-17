@@ -381,6 +381,12 @@ std::vector<float> Model::forward(
         const float* u_w = W(this, ln + "mlp.up_proj.weight");
         const float* d_w = W(this, ln + "mlp.down_proj.weight");
 
+        // QK-norm（可选，MiniMind 风格）：权重存在才启用，不影响没有该结构的模型
+        const Tensor* q_norm_t = get_tensor(ln + "self_attn.q_norm.weight");
+        const Tensor* k_norm_t = get_tensor(ln + "self_attn.k_norm.weight");
+        const float* q_norm_w = q_norm_t ? reinterpret_cast<const float*>(q_norm_t->data) : nullptr;
+        const float* k_norm_w = k_norm_t ? reinterpret_cast<const float*>(k_norm_t->data) : nullptr;
+
         const float* k_cache = kv_cache ? kv_cache->k_cache.data() + l * max_seq * num_kv_heads * head_dim : nullptr;
         const float* v_cache = kv_cache ? kv_cache->v_cache.data() + l * max_seq * num_kv_heads * head_dim : nullptr;
 
@@ -407,6 +413,18 @@ std::vector<float> Model::forward(
             ops::matvec(q_w, x, q.data(), num_heads * head_dim, hidden);
             ops::matvec(k_w, x, k.data(), num_kv_heads * head_dim, hidden);
             ops::matvec(v_w, x, v.data(), num_kv_heads * head_dim, hidden);
+
+            // QK-norm（按 head 归一化，必须在 RoPE 之前）
+            if (q_norm_w) {
+                for (size_t h = 0; h < num_heads; h++)
+                    ops::rmsnorm(q.data() + h * head_dim, q_norm_w, q.data() + h * head_dim,
+                                 head_dim, config_.rms_norm_eps);
+            }
+            if (k_norm_w) {
+                for (size_t h = 0; h < num_kv_heads; h++)
+                    ops::rmsnorm(k.data() + h * head_dim, k_norm_w, k.data() + h * head_dim,
+                                 head_dim, config_.rms_norm_eps);
+            }
 
             // RoPE（rotate_half 语义）
             for (size_t h = 0; h < num_heads; h++) apply_rope_pocket(q.data() + h * head_dim, head_dim, cur_pos, config_.rope_theta);
